@@ -1,5 +1,5 @@
 (()=>{'use strict';
-const VERSION='1.0.0';
+const VERSION='1.1.0';
 const $=(s,r=document)=>r.querySelector(s);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -119,7 +119,7 @@ async function netAuto(){
 async function batteryAuto(){
   if(!navigator.getBattery)return R('unsupported','Battery API no disponible (solo Chrome/Android la ofrece)');
   const b=await navigator.getBattery(),t=x=>x===Infinity?'∞':x;
-  return R('ok','',{nivel:Math.round(b.level*100)+'%',cargando:b.charging,segundosHastaCarga:t(b.chargingTime),segundosHastaDescarga:t(b.dischargingTime)});
+  return R('ok','Salud y ciclos no son accesibles desde el navegador: introdúcelos a mano en el test guiado.',{nivel:Math.round(b.level*100)+'%',cargando:b.charging,segundosHastaCarga:t(b.chargingTime),segundosHastaDescarga:t(b.dischargingTime),saludBateria:'no accesible desde el navegador',ciclosCarga:'no accesibles desde el navegador'});
 }
 function geoAuto(){return new Promise(res=>{
   if(!navigator.geolocation)return res(R('unsupported','Geolocation API no disponible'));
@@ -201,31 +201,59 @@ async function waitVideo(v,st){v.muted=true;v.playsInline=true;v.srcObject=st;aw
   for(let i=0;i<40&&!v.videoWidth;i++)await sleep(100);if(!v.videoWidth)throw new Error('La cámara no entregó imagen');}
 const camErr=(e,f)=>e&&(e.name==='NotFoundError'||e.name==='OverconstrainedError')?'No se encontró cámara '+(f==='environment'?'trasera':'frontal'):gumErr(e);
 const camMismatch=(i,f)=>i.facingModeReportado!=='(n/d)'&&i.facingModeReportado!==f?'Se pidió cámara '+(f==='environment'?'trasera':'frontal')+' pero se abrió "'+i.facingModeReportado+'" (probablemente no existe o no está disponible)':'';
+function analyzeFrame(v){
+  const w=320,h=Math.round(w*v.videoHeight/v.videoWidth)||240,c=document.createElement('canvas');c.width=w;c.height=h;
+  const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(v,0,0,w,h);
+  const d=x.getImageData(0,0,w,h).data,g=new Float32Array(w*h);let sum=0,dark=0,burn=0;
+  for(let i=0,j=0;i<d.length;i+=4,j++){const l=.2126*d[i]+.7152*d[i+1]+.0722*d[i+2];g[j]=l;sum+=l;if(l<10)dark++;if(l>245)burn++;}
+  const mean=sum/g.length;let vr=0;for(const l of g)vr+=(l-mean)**2;
+  const L=[];for(let y=1;y<h-1;y++)for(let xx=1;xx<w-1;xx++){const i=y*w+xx;L.push(4*g[i]-g[i-1]-g[i+1]-g[i-w]-g[i+w]);}
+  const lm=L.reduce((a,b)=>a+b,0)/L.length;let lv=0;for(const l of L)lv+=(l-lm)**2;lv/=L.length;
+  return{luminanciaMedia0a255:Math.round(mean),contraste:Math.round(Math.sqrt(vr/g.length)),nitidezLaplaciano:Math.round(lv),
+    nitidezValoracion:lv>100?'nítida':lv>30?'media':'baja (borrosa, lente sucia o escena sin detalle)',pixelesMuyOscurosPct:fmt(dark/g.length*100,1),pixelesQuemadosPct:fmt(burn/g.length*100,1)};
+}
+const measureFps=v=>new Promise(res=>{if(!v.requestVideoFrameCallback)return res(null);let n=0,t0=null;const cb=(now)=>{if(t0==null)t0=now;else n++;if(now-t0<1000)v.requestVideoFrameCallback(cb);else res(fmt(n*1000/(now-t0),1));};v.requestVideoFrameCallback(cb);setTimeout(()=>res(null),2500);});
+async function fullPhoto(st){
+  try{if(!window.ImageCapture)return{error:'ImageCapture no disponible en este navegador'};
+    const ic=new ImageCapture(st.getVideoTracks()[0]);let pc={};try{pc=await ic.getPhotoCapabilities();}catch{}
+    const blob=await withTimeout(ic.takePhoto(),6000,'takePhoto sin respuesta'),bm=await createImageBitmap(blob);
+    const o={ancho:bm.width,alto:bm.height,mp:fmt(bm.width*bm.height/1e6,1),kb:Math.round(blob.size/1024),
+      maxFoto:pc.imageWidth&&pc.imageHeight?pc.imageWidth.max+'×'+pc.imageHeight.max+' ('+fmt(pc.imageWidth.max*pc.imageHeight.max/1e6,1)+' MP)':'(n/d)',flash:pc.fillLightMode?pc.fillLightMode.join(', '):'(n/d)',blob};
+    if(bm.close)bm.close();return o;}catch(e){return{error:errMsg(e)};}
+}
+const photoTxt=p=>p?(p.error?'no disponible: '+p.error:p.ancho+'×'+p.alto+' ('+p.mp+' MP, '+p.kb+' KB) · máx. sensor '+p.maxFoto+' · flash '+p.flash):'no';
 async function camAuto(f){
   if(!hasGUM())return R('unsupported','getUserMedia no disponible (¿falta HTTPS?)');
   let st;try{st=await openCam(f);}catch(e){return R('fail',camErr(e,f));}
   const v=document.createElement('video');
-  try{await waitVideo(v,st);await sleep(300);
+  try{await waitVideo(v,st);await sleep(500);
     const i=camInfo(st);i.resolucionVideo=v.videoWidth+'×'+v.videoHeight;
-    const c=document.createElement('canvas');c.width=32;c.height=24;const x=c.getContext('2d');x.drawImage(v,0,0,32,24);
-    const d=x.getImageData(0,0,32,24).data;let L=0;for(let k=0;k<d.length;k+=4)L+=.2126*d[k]+.7152*d[k+1]+.0722*d[k+2];L/=d.length/4;i.luminanciaMedia0a255=Math.round(L);
     const mm=camMismatch(i,f);if(mm)return R('fail',mm,i);
-    return R('ok',L<4?'Imagen casi negra: lente tapada o poca luz.':'',i);
+    Object.assign(i,analyzeFrame(v));i.fpsMedidos=(await measureFps(v))||'(n/d)';
+    i.fotoCompleta=photoTxt(await fullPhoto(st));
+    return R('ok',i.luminanciaMedia0a255<4?'Imagen casi negra: lente tapada o poca luz.':'Nitidez/contraste dependen de la escena: usa el test guiado apuntando a un texto.',i);
   }catch(e){return R('fail',errMsg(e));}finally{stopStream(st);v.srcObject=null;}
 }
 async function camGuided(ui,f){
   if(!hasGUM())return R('unsupported','getUserMedia no disponible (¿falta HTTPS?)');
   let st;try{st=await openCam(f);}catch(e){return R('fail',camErr(e,f));}
   ui.onCleanup(()=>stopStream(st));
-  ui.body.innerHTML='<video id="cv" autoplay playsinline muted></video><p class="muted" id="cInfo">Abriendo…</p><button class="btn" id="shot" style="width:100%">📸 Capturar foto de prueba</button><div id="shotOut"></div>';
-  const v=$('#cv');let info={},photo='no';
-  try{await waitVideo(v,st);info=camInfo(st);info.resolucionVideo=v.videoWidth+'×'+v.videoHeight;
-    $('#cInfo').textContent=info.resolucionVideo+' · '+(info.fps||'?')+' fps · '+info.etiqueta+' · linterna '+(info.linterna?'sí':'no');}
+  ui.body.innerHTML='<video id="cv" autoplay playsinline muted></video><p class="muted" id="cInfo">Abriendo…</p><p class="muted">Apunta a un texto o página con detalle y a una distancia de ~20 cm para medir la nitidez.</p><div class="grid2"><button class="btn" id="shot">📸 Foto a máxima resolución</button><button class="btn" id="torch" hidden>🔦 Linterna</button></div><div id="shotOut"></div>';
+  const v=$('#cv');let info={},photo=null,torchOn=false,torchTried=false,q=null;
+  try{await waitVideo(v,st);info=camInfo(st);info.resolucionVideo=v.videoWidth+'×'+v.videoHeight;info.fpsMedidos=(await measureFps(v))||'(n/d)';
+    $('#cInfo').textContent=info.resolucionVideo+' · '+info.fpsMedidos+' fps · máx. '+info.resolucionMaxima+' · '+info.etiqueta;}
   catch(e){return R('fail',errMsg(e));}
   const mm=camMismatch(info,f);if(mm)$('#cInfo').textContent='⚠ '+mm;
-  $('#shot').onclick=()=>{const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);
-    c.toBlob(b=>{photo=c.width+'×'+c.height+' ('+Math.round(b.size/1024)+' KB)';const u=URL.createObjectURL(b);$('#shotOut').innerHTML='<p class="muted">Foto capturada: '+photo+'</p><img src="'+u+'" style="width:100%;border-radius:12px">';ui.suggest(true);},'image/jpeg',.92);};
-  const r=await ui.verdict();info.fotoCapturada=photo;
+  if(info.linterna)$('#torch').hidden=false;
+  $('#torch').onclick=async()=>{torchTried=true;try{torchOn=!torchOn;await st.getVideoTracks()[0].applyConstraints({advanced:[{torch:torchOn}]});}catch(e){$('#cInfo').textContent='Linterna: '+errMsg(e);}};
+  $('#shot').onclick=async()=>{$('#shot').textContent='Capturando…';q=analyzeFrame(v);photo=await fullPhoto(st);$('#shot').textContent='📸 Repetir foto';
+    let url,extra='';
+    if(photo&&photo.blob)url=URL.createObjectURL(photo.blob);
+    else{const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);url=c.toDataURL('image/jpeg',.92);extra=' (captura de vídeo; takePhoto no disponible)';}
+    $('#shotOut').innerHTML='<div class="card"><b>Foto:</b> '+esc(photoTxt(photo))+esc(extra)+'<pre>nitidez '+q.nitidezLaplaciano+' ('+esc(q.nitidezValoracion)+')\nluminancia '+q.luminanciaMedia0a255+'/255 · contraste '+q.contraste+'\noscuros '+q.pixelesMuyOscurosPct+'% · quemados '+q.pixelesQuemadosPct+'%</pre></div><img src="'+url+'" style="width:100%;border-radius:12px">';ui.suggest(true);};
+  const r=await ui.verdict();
+  if(torchOn)try{await st.getVideoTracks()[0].applyConstraints({advanced:[{torch:false}]});}catch{}
+  if(q)Object.assign(info,q);info.fotoCompleta=photoTxt(photo);if(info.linterna)info.linternaProbada=torchTried?'sí':'no';
   return R(vs(r),r==='ok'&&mm?mm:'',info);
 }
 async function vibeAuto(){
@@ -234,12 +262,26 @@ async function vibeAuto(){
 }
 async function vibeGuided(ui){
   if(!navigator.vibrate)return R('unsupported','Vibration API no disponible');
-  const P={c:['Corta 200 ms',200],m:['Media 500 ms',500],p:['Patrón',[100,50,100,50,300]],l:['Larga 1 s',1000]};
-  ui.body.innerHTML='<p>Sujeta el teléfono y pulsa cada patrón. Deberías sentir el motor háptico.</p><div class="grid2">'+Object.entries(P).map(([k,[n]])=>'<button class="btn" data-p="'+k+'">'+n+'</button>').join('')+'</div>';
-  const tried=[];let blocked=0;ui.onCleanup(()=>navigator.vibrate(0));
-  ui.body.addEventListener('click',e=>{const b=e.target.closest('[data-p]');if(!b)return;const p=P[b.dataset.p];tried.push(p[0]);if(!navigator.vibrate(p[1]))blocked++;});
+  const P={c:['Corta 200 ms',200],m:['Media 500 ms',500],p:['Patrón',[100,50,100,50,300]],l:['Larga 1 s',1000],r:['Repetida ~3 s',[400,150,400,150,400,150,400,150,400]]};
+  ui.body.innerHTML='<p>Sujeta el teléfono con la pantalla encendida y pulsa cada patrón. Debajo verás lo que responde el navegador.</p><div class="grid2">'+Object.entries(P).map(([k,[n]])=>'<button class="btn" data-p="'+k+'">'+n+'</button>').join('')+'</div><pre id="vLog">(sin pulsaciones)</pre><div class="card"><b>Si el navegador dice «true» pero no vibra:</b><pre>• Ajustes › Sonido y vibración: activa la vibración y sube su intensidad (en algunos móviles hay un control aparte para «multimedia/notificaciones»).\n• Quita modo silencio, No molestar y ahorro de batería.\n• Prueba en Chrome (no en navegadores integrados de apps).\n• Si vibra al teclear pero aquí no, es una limitación del fabricante/Chrome: márcalo como Fallo.</pre></div>';
+  const tried=[],log=[];let blocked=0;ui.onCleanup(()=>navigator.vibrate(0));
+  ui.body.addEventListener('click',e=>{const b=e.target.closest('[data-p]');if(!b)return;const p=P[b.dataset.p];tried.push(p[0]);
+    let ok;try{ok=navigator.vibrate(p[1]);}catch(er){ok='error '+errMsg(er);}if(ok!==true)blocked++;
+    log.push(new Date().toLocaleTimeString()+'  '+p[0]+' → vibrate() devolvió '+ok);$('#vLog').textContent=log.slice(-6).join('\n');});
   const v=await ui.verdict();
-  return R(vs(v),blocked?'vibrate() devolvió false '+blocked+' vez/veces':(v==='ok'&&!tried.length?'Marcado OK sin probar ningún patrón':''),{patronesProbados:tried.join(', ')||'ninguno'});
+  return R(vs(v),blocked?'vibrate() devolvió false/error '+blocked+' vez/veces (el navegador bloqueó la orden)':(v==='fail'&&tried.length?'El navegador aceptó la orden pero el usuario no sintió vibración (ajustes del sistema o limitación del fabricante)':(v==='ok'&&!tried.length?'Marcado OK sin probar ningún patrón':'')),{patronesProbados:tried.join(', ')||'ninguno',ordenesAceptadas:tried.length-blocked,ordenesBloqueadas:blocked});
+}
+async function batteryGuided(ui){
+  const b=navigator.getBattery?await navigator.getBattery().catch(()=>null):null;
+  ui.body.innerHTML='<div class="card"><b>Lo que ve el navegador</b><pre id="bLive">'+(b?'':'API de batería no disponible')+'</pre></div><div class="card"><b>Salud y ciclos de carga</b><p class="muted">Ningún navegador puede leer la salud ni los ciclos de la batería: Android no los expone a las páginas web. Mira el dato en el propio móvil y escríbelo aquí para que quede en el informe:</p><pre>• Pixel (Android 14+): Ajustes › Batería › Estado de la batería.\n• Samsung: app Samsung Members › Diagnóstico › Batería, o marca *#0228# y mira «LEVEL/Capacity».\n• Otras marcas: marcador *#*#4636#*#* › Información de la batería, o una app como AccuBattery.</pre><label class="chk">Salud (%) <input id="bH" type="number" inputmode="numeric" min="0" max="100" style="width:90px;min-height:44px;font-size:16px"></label><label class="chk">Ciclos <input id="bC" type="number" inputmode="numeric" min="0" style="width:90px;min-height:44px;font-size:16px"></label></div>';
+  if(b){const up=()=>{$('#bLive')&&($('#bLive').textContent='Nivel '+Math.round(b.level*100)+'% · '+(b.charging?'cargando':'descargando')+'\nHasta carga: '+(b.chargingTime===Infinity?'∞':b.chargingTime+' s')+'\nHasta descarga: '+(b.dischargingTime===Infinity?'∞':b.dischargingTime+' s'));};
+    up();['levelchange','chargingchange','chargingtimechange','dischargingtimechange'].forEach(e=>b.addEventListener(e,up));ui.onCleanup(()=>['levelchange','chargingchange','chargingtimechange','dischargingtimechange'].forEach(e=>b.removeEventListener(e,up)));}
+  const v=await ui.verdict();
+  const h=$('#bH').value,c=$('#bC').value,d={};
+  if(b){d.nivel=Math.round(b.level*100)+'%';d.cargando=b.charging;}
+  d.saludBateriaPct=h!==''?h+' (introducido a mano)':'no indicada';d.ciclosCarga=c!==''?c+' (introducido a mano)':'no indicados';
+  let note='';if(h!==''&&+h<80)note='Salud baja (<80%): la batería está degradada.';
+  return R(vs(v),note,d);
 }
 
 /* ---------- Pantalla y táctil (guiadas) ---------- */
@@ -300,7 +342,7 @@ async function sensorsGuided(ui){
 }
 
 /* ---------- Catálogo de pruebas ---------- */
-const cam=(f,n)=>({id:f==='environment'?'cam_rear':'cam_front',group:'Cámara',name:n,desc:'Acceso, resolución y captura',est:f==='environment'?10:10,eA:4,timeout:30000,auto:()=>camAuto(f),guided:ui=>camGuided(ui,f)});
+const cam=(f,n)=>({id:f==='environment'?'cam_rear':'cam_front',group:'Cámara',name:n,desc:'Resolución, nitidez, fps y foto máx.',est:f==='environment'?10:10,eA:4,timeout:30000,auto:()=>camAuto(f),guided:ui=>camGuided(ui,f)});
 const TESTS=[
  {id:'env',group:'Entorno',name:'Dispositivo y navegador',desc:'Modelo, CPU, memoria, user-agent',est:1,eA:1,auto:envAuto},
  {id:'caps',group:'Entorno',name:'Capacidades del navegador',desc:'WebGL, WebRTC, Wake Lock, portapapeles',est:2,eA:2,auto:capsAuto},
@@ -314,7 +356,7 @@ const TESTS=[
  {id:'vibe',group:'Vibración',name:'Motor de vibración',desc:'Patrones corto, medio y largo',est:8,eA:1,auto:vibeAuto,guided:vibeGuided},
  {id:'net',group:'Conectividad',name:'Red y latencia',desc:'Estado, tipo de conexión, latencia, descarga',est:5,eA:5,timeout:40000,auto:netAuto},
  {id:'geo',group:'Ubicación',name:'GPS / geolocalización',desc:'Latitud, longitud, precisión, tiempo',est:6,eA:6,timeout:40000,auto:geoAuto},
- {id:'battery',group:'Batería',name:'Batería',desc:'Nivel y estado de carga',est:1,eA:1,auto:batteryAuto}
+ {id:'battery',group:'Batería',name:'Batería',desc:'Nivel, carga, salud y ciclos (manual)',est:12,eA:1,auto:batteryAuto,guided:batteryGuided}
 ];
 const byId=id=>TESTS.find(t=>t.id===id);
 const cost=(t,m)=>m==='guided'?t.est:(t.eA||t.est);
