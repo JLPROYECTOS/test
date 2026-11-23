@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>Diagnóstico Android</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">📱</span><div><h1>Diagnóstico Android</h1><small>Test de hardware desde el navegador</small></div></div>
+  <button id="btnTheme" class="icon" aria-label="Cambiar tema" title="Tema: oscuro / claro / alto contraste">🌓</button>
+</header>
+<nav class="tabs">
+  <button data-tab="home" class="on">Pruebas</button>
+  <button data-tab="report">Informe <span id="tabBadge"></span></button>
+</nav>
+<main>
+  <section id="home">
+    <div class="actions">
+      <button id="btnQuick" class="btn primary big">⚡ Test rápido automático <small id="estQuick"></small></button>
+      <button id="btnGuided" class="btn big">🧭 Test guiado (manuales) <small id="estGuided"></small></button>
+      <button id="btnAll" class="btn big">🚀 Completo (auto + guiado) <small id="estAll"></small></button>
+    </div>
+    <div id="prog" class="prog" hidden><div class="bar"><i id="bar"></i></div><div class="progtxt" id="progTxt"></div></div>
+    <p class="muted tip">Los permisos (cámara, micrófono, ubicación) se piden al probar. Si los deniegas, la prueba se marca como Fallo sin romper nada.</p>
+    <div id="list"></div>
+  </section>
+  <section id="report" hidden>
+    <div class="card" id="repSummary"></div>
+    <label class="chk"><input type="checkbox" id="chkCoords"> Incluir coordenadas GPS exactas en el informe</label>
+    <div class="grid2">
+      <button id="btnCopy" class="btn primary">📋 Copiar informe</button>
+      <button id="btnShare" class="btn" hidden>📤 Compartir</button>
+      <button id="btnJson" class="btn">⬇ Descargar .json</button>
+      <button id="btnTxt" class="btn">⬇ Descargar .txt</button>
+      <button id="btnRetry" class="btn">↻ Repetir fallidos/pendientes</button>
+      <button id="btnReset" class="btn danger">🗑 Reiniciar todo</button>
+    </div>
+    <div id="repList"></div>
+  </section>
+</main>
+
+<div id="stage" hidden>
+  <div class="shead">
+    <div><small id="sStep"></small><h2 id="sTitle"></h2></div>
+    <button id="sAbort" class="icon" aria-label="Cancelar flujo">✕</button>
+  </div>
+  <div class="sprog"><div class="bar"><i id="sBar"></i></div><small id="sEta"></small></div>
+  <div id="sBody"></div>
+  <div class="sfoot">
+    <button id="vFail" class="btn danger">✗ Fallo</button>
+    <button id="vSkip" class="btn">Saltar</button>
+    <button id="vOk" class="btn okbtn">✓ OK</button>
+  </div>
+</div>
+<div id="fs" hidden><div id="fsLbl"></div></div>
+<div id="toast"></div>
+<noscript>Esta app necesita JavaScript.</noscript>
+<script src="app.js"></script>
+</body>
+</html>
